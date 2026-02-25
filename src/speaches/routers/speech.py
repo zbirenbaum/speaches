@@ -102,26 +102,42 @@ def synthesize(
 ) -> StreamingResponse:
     # Check vLLM proxy first for remote models
     if executor_registry.vllm_tts_proxy and executor_registry.vllm_tts_proxy.can_handle(body.model):
+        # Resolve saved voice: inject ref_audio/ref_text from voice registry.
+        ref_audio = body.ref_audio
+        ref_text = body.ref_text
+        task_type = body.task_type
+        voice = body.voice
+
+        if ref_audio is None and executor_registry.voice_registry and executor_registry.voice_registry.has_voice(voice):
+            saved = executor_registry.voice_registry.get_voice(voice)
+            audio_b64 = executor_registry.voice_registry.get_voice_audio_base64(voice)
+            if saved and audio_b64:
+                ref_audio = f"data:audio/wav;base64,{audio_b64}"
+                if ref_text is None:
+                    ref_text = saved.ref_text
+                if task_type is None:
+                    task_type = "Base"
+
         extra_body: dict = {}
-        if body.task_type is not None:
-            extra_body["task_type"] = body.task_type
+        if task_type is not None:
+            extra_body["task_type"] = task_type
         if body.instructions is not None:
             extra_body["instructions"] = body.instructions
         if body.language is not None:
             extra_body["language"] = body.language
-        if body.ref_audio is not None:
-            extra_body["ref_audio"] = body.ref_audio
-        if body.ref_text is not None:
-            extra_body["ref_text"] = body.ref_text
+        if ref_audio is not None:
+            extra_body["ref_audio"] = ref_audio
+        if ref_text is not None:
+            extra_body["ref_text"] = ref_text
         if body.max_new_tokens is not None:
             extra_body["max_new_tokens"] = body.max_new_tokens
         return executor_registry.vllm_tts_proxy.proxy_speech_request(
             model=body.model,
             input_text=body.input,
-            voice=body.voice,
+            voice=voice,
             response_format=body.response_format,
             speed=body.speed,
-            extra_body=extra_body if extra_body else None,
+            extra_body=extra_body or None,
         )
 
     model_card_data = get_model_card_data_or_raise(body.model)

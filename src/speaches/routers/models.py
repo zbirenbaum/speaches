@@ -66,6 +66,10 @@ def list_local_audio_voices(
     voices: list[dict] = [voice.model_dump() for model in models for voice in model.voices]
     if executor_registry.vllm_tts_proxy:
         voices.extend(executor_registry.vllm_tts_proxy.list_all_voices())
+    if executor_registry.voice_registry:
+        voices.extend(
+            {"id": s.id, "name": s.name, "source": "saved"} for s in executor_registry.voice_registry.list_voices()
+        )
     return JSONResponse(content={"voices": voices, "object": "list"})
 
 

@@ -11,21 +11,23 @@ if TYPE_CHECKING:
     from speaches.config import Config
 
 from speaches.executors.kokoro import KokoroModelManager, kokoro_model_registry
-from speaches.executors.vllm_tts import VllmTtsProxy
 from speaches.executors.parakeet import ParakeetModelManager, parakeet_model_registry
 from speaches.executors.piper import PiperModelManager, piper_model_registry
 from speaches.executors.shared.executor import Executor
 from speaches.executors.silero_vad_v5 import SileroVADModelManager, silero_vad_model_registry
+from speaches.executors.vllm_tts import VllmTtsProxy
 from speaches.executors.wespeaker_speaker_embedding import (
     WespeakerSpeakerEmbeddingModelManager,
     wespeaker_speaker_embedding_model_registry,
 )
 from speaches.executors.whisper import WhisperModelManager, whisper_model_registry
+from speaches.voice_registry import VoiceRegistry
 
 
 class ExecutorRegistry:
     def __init__(self, config: Config) -> None:
         self.vllm_tts_proxy = VllmTtsProxy(config.vllm_tts_endpoints) if config.vllm_tts_endpoints else None
+        self.voice_registry = VoiceRegistry(config.voice_dir)
         self._whisper_executor = Executor(
             name="whisper",
             model_manager=WhisperModelManager(config.stt_model_ttl, config.whisper),

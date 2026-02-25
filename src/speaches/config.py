@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, SecretStr
@@ -155,4 +156,9 @@ class Config(BaseSettings):
     Each entry maps a model ID to a vLLM base URL.
     Example: [{"model_id": "Qwen/Qwen3-TTS-12Hz-1.7B-Base", "base_url": "http://tts-voice-cloning:8000"}]
     Set via VLLM_TTS_ENDPOINTS='[{"model_id": "...", "base_url": "..."}]'
+    """
+
+    voice_dir: Path = Path.home() / ".cache" / "speaches" / "voices"
+    """
+    Directory to store saved voice clone profiles (reference audio + metadata).
     """

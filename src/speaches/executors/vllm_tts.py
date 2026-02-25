@@ -1,13 +1,16 @@
+import base64
 import logging
 
-import httpx
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
+import httpx
 
 from speaches.api_types import Model
 from speaches.config import VllmTtsEndpoint
 
 logger = logging.getLogger(__name__)
+
+_VOICE_REGISTER_TIMEOUT = 30.0
 
 
 class VllmTtsProxy:
@@ -98,3 +101,30 @@ class VllmTtsProxy:
                 client.close()
 
         return StreamingResponse(stream_response(), media_type=content_type)
+
+    def register_voice_with_backends(
+        self,
+        *,
+        voice_id: str,
+        audio_bytes: bytes,
+        ref_text: str,
+        name: str,
+    ) -> None:
+        audio_b64 = base64.b64encode(audio_bytes).decode()
+        ref_audio_data_url = f"data:audio/wav;base64,{audio_b64}"
+        payload = {
+            "name": voice_id,
+            "ref_audio": ref_audio_data_url,
+            "ref_text": ref_text or None,
+        }
+        for model_id, base_url in self._endpoints.items():
+            try:
+                resp = httpx.post(
+                    f"{base_url}/v1/audio/voices",
+                    json=payload,
+                    timeout=_VOICE_REGISTER_TIMEOUT,
+                )
+                resp.raise_for_status()
+                logger.info(f"Registered voice '{name}' with vLLM backend {model_id}")
+            except Exception:
+                logger.exception(f"Failed to register voice '{name}' with vLLM backend {model_id}")
