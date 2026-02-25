@@ -210,7 +210,7 @@ class ResponseHandler:
                             model=self.speech_model,
                             voice=self.configuration.voice,  # pyright: ignore[reportArgumentType]
                             response_format="pcm",
-                            extra_body={"sample_rate": 24000},
+                            extra_body={"sample_rate": 24000, "task_type": "Base"},
                         )
                         audio_bytes = res.read()
                         audio_data = base64.b64encode(audio_bytes).decode("utf-8")
