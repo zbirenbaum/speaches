@@ -12,8 +12,8 @@ from openai import AsyncOpenAI
 from speaches.dependencies import (
     ConfigDependency,
     ExecutorRegistryDependency,
-    SpeechClientDependency,
     TranscriptionClientDependency,
+    get_speech_client,
 )
 from speaches.realtime.context import SessionContext
 from speaches.realtime.conversation_event_router import event_router as conversation_event_router
@@ -61,7 +61,6 @@ async def realtime(
     config: ConfigDependency,
     transcription_client: TranscriptionClientDependency,
     executor_registry: ExecutorRegistryDependency,
-    speech_client: SpeechClientDependency,
     intent: str = "conversation",
     language: str | None = None,
     transcription_model: str | None = None,
@@ -86,8 +85,9 @@ async def realtime(
         return
 
     await ws.accept()
-    logger.info(f"Accepted websocket connection with intent: {intent}, speech_client={speech_client}")
+    logger.info(f"Accepted websocket connection with intent: {intent}")
 
+    speech_client = get_speech_client()
     completion_client = AsyncOpenAI(
         base_url=f"http://{config.host}:{config.port}/v1",
         api_key=config.api_key.get_secret_value() if config.api_key else "cant-be-empty",
