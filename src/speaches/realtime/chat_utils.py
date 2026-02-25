@@ -22,28 +22,29 @@ from speaches.types.realtime import ConversationItem, Response
 logger = logging.getLogger(__name__)
 
 
+def _build_tool_kwargs(response: Response) -> dict:
+    if len(response.tools) == 0:
+        return {}
+    return {
+        "tools": [
+            ChatCompletionToolParam(
+                type=tool.type,
+                function=FunctionDefinition(
+                    name=tool.name, description=tool.description or "", parameters=tool.parameters
+                ),
+            )
+            for tool in response.tools
+        ],
+        "tool_choice": response.tool_choice,
+    }
+
+
 def create_completion_params(
     model_id: str, messages: list[ChatCompletionMessageParam], response: Response
 ) -> CompletionCreateParamsStreaming:
     assert response.output_audio_format == "pcm16"  # HACK
 
     max_tokens = None if response.max_response_output_tokens == "inf" else response.max_response_output_tokens
-    kwargs = {}
-    if len(response.tools) > 0:
-        # openai.BadRequestError: Error code: 400 - {'error': {'message': "Invalid value for 'tool_choice': 'tool_choice' is only allowed when 'tools' are specified.", 'type': 'invalid_request_error', 'param': 'tool_choice', 'code': None}}
-        # openai.BadRequestError: Error code: 400 - {'error': {'message': "Invalid 'tools': empty array. Expected an array with minimum length 1, but got an empty array instead.", 'type': 'invalid_request_error', 'param': 'tools', 'code': 'empty_array'}}
-        # TODO: I might be able to get away with not doing any conversion here, but I'm not sure. Test it out.
-        kwargs["tools"] = [
-            ChatCompletionToolParam(
-                type=tool.type,
-                # HACK: figure out why `tool.description` is nullable
-                function=FunctionDefinition(
-                    name=tool.name, description=tool.description or "", parameters=tool.parameters
-                ),
-            )
-            for tool in response.tools
-        ]
-        kwargs["tool_choice"] = response.tool_choice
 
     return CompletionCreateParamsStreaming(
         model=model_id,
@@ -63,7 +64,30 @@ def create_completion_params(
         temperature=response.temperature,
         max_tokens=max_tokens,
         stream_options=ChatCompletionStreamOptionsParam(include_usage=True),
-        **kwargs,
+        **_build_tool_kwargs(response),
+    )
+
+
+def create_text_completion_params(
+    model_id: str, messages: list[ChatCompletionMessageParam], response: Response
+) -> CompletionCreateParamsStreaming:
+    max_tokens = None if response.max_response_output_tokens == "inf" else response.max_response_output_tokens
+
+    return CompletionCreateParamsStreaming(
+        model=model_id,
+        messages=[
+            ChatCompletionSystemMessageParam(
+                role="system",
+                content=response.instructions,
+            ),
+            *messages,
+        ],
+        stream=True,
+        modalities=["text"],
+        temperature=response.temperature,
+        max_tokens=max_tokens,
+        stream_options=ChatCompletionStreamOptionsParam(include_usage=True),
+        **_build_tool_kwargs(response),
     )
 
 

@@ -51,7 +51,7 @@ def create_session_object_configuration(
         model=conversation_model,
         modalities=["audio", "text"],
         instructions=OPENAI_REALTIME_INSTRUCTIONS,
-        speech_model="speaches-ai/Kokoro-82M-v1.0-ONNX",
+        speech_model="Qwen/Qwen3-TTS-12Hz-1.7B-Base",
         voice="af_heart",
         input_audio_format="pcm16",
         output_audio_format="pcm16",

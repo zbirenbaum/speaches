@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from contextlib import contextmanager
 import logging
 from typing import TYPE_CHECKING
@@ -9,13 +10,16 @@ import openai
 from openai.types.beta.realtime.error_event import Error
 from pydantic import BaseModel
 
+from speaches import text_utils
 from speaches.realtime.chat_utils import (
     create_completion_params,
+    create_text_completion_params,
     items_to_chat_messages,
 )
 from speaches.realtime.event_router import EventRouter
 from speaches.realtime.session_event_router import unsupported_field_error, update_dict
 from speaches.realtime.utils import generate_response_id, task_done_callback
+from speaches.text_utils import SentenceChunker
 from speaches.types.realtime import (
     ConversationItemContentAudio,
     ConversationItemContentText,
@@ -48,6 +52,7 @@ from speaches.types.realtime import (
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
 
+    from openai.resources.audio import AsyncSpeech
     from openai.resources.chat import AsyncCompletions
     from openai.types.chat import ChatCompletionChunk
 
@@ -82,6 +87,8 @@ class ResponseHandler:
         configuration: Response,
         conversation: Conversation,
         pubsub: EventPubSub,
+        speech_client: AsyncSpeech | None = None,
+        speech_model: str | None = None,
     ) -> None:
         self.id = generate_response_id()
         self.completion_client = completion_client
@@ -89,6 +96,8 @@ class ResponseHandler:
         self.configuration = configuration
         self.conversation = conversation
         self.pubsub = pubsub
+        self.speech_client = speech_client
+        self.speech_model = speech_model
         self.response = RealtimeResponse(
             id=self.id,
             status="incomplete",
@@ -176,6 +185,64 @@ class ResponseHandler:
                     )
                 )
 
+    async def conversation_item_message_tts_handler(self, chunk_stream: AsyncGenerator[ChatCompletionChunk]) -> None:
+        assert self.speech_client is not None
+        assert self.speech_model is not None
+
+        with self.add_output_item(ConversationItemMessage(role="assistant", status="incomplete", content=[])) as item:
+            self.conversation.create_item(item)
+
+            with self.add_item_content(item, ConversationItemContentAudio(audio="", transcript="")) as content:
+                sentence_chunker = SentenceChunker()
+
+                async def _synthesize_sentences() -> None:
+                    assert self.speech_client is not None
+                    async for sentence in sentence_chunker:
+                        sentence_clean = sentence.strip()
+                        sentence_clean = text_utils.strip_markdown_emphasis(sentence_clean)
+                        sentence_clean = text_utils.strip_emojis(sentence_clean)
+                        sentence_clean = sentence_clean.strip()
+                        if len(sentence_clean) == 0:
+                            logger.warning(f"Skipping empty sentence. ORIGINAL: {sentence}")
+                            continue
+                        res = await self.speech_client.create(
+                            input=sentence_clean,
+                            model=self.speech_model,
+                            voice=self.configuration.voice,  # pyright: ignore[reportArgumentType]
+                            response_format="pcm",
+                            extra_body={"sample_rate": 24000},
+                        )
+                        audio_bytes = res.read()
+                        audio_data = base64.b64encode(audio_bytes).decode("utf-8")
+                        self.pubsub.publish_nowait(
+                            ResponseAudioDeltaEvent(item_id=item.id, response_id=self.id, delta=audio_data)
+                        )
+
+                tts_task = asyncio.create_task(_synthesize_sentences())
+
+                async for chunk in chunk_stream:
+                    if len(chunk.choices) == 0:
+                        continue
+                    choice = chunk.choices[0]
+                    if choice.delta.content is not None:
+                        content.transcript += choice.delta.content
+                        sentence_chunker.add_token(choice.delta.content)
+                        self.pubsub.publish_nowait(
+                            ResponseAudioTranscriptDeltaEvent(
+                                item_id=item.id, response_id=self.id, delta=choice.delta.content
+                            )
+                        )
+
+                sentence_chunker.close()
+                await tts_task
+
+                self.pubsub.publish_nowait(ResponseAudioDoneEvent(item_id=item.id, response_id=self.id))
+                self.pubsub.publish_nowait(
+                    ResponseAudioTranscriptDoneEvent(
+                        item_id=item.id, response_id=self.id, transcript=content.transcript
+                    )
+                )
+
     async def conversation_item_function_call_handler(self, chunk_stream: AsyncGenerator[ChatCompletionChunk]) -> None:
         chunk = await anext(chunk_stream)
 
@@ -224,17 +291,22 @@ class ResponseHandler:
                 )
             )
 
+    def _use_tts_handler(self) -> bool:
+        return self.speech_client is not None and "audio" in self.configuration.modalities
+
     async def generate_response(self) -> None:
         try:
-            completion_params = create_completion_params(
-                self.model,
-                list(items_to_chat_messages(self.configuration.input)),
-                self.configuration,
-            )
+            messages = list(items_to_chat_messages(self.configuration.input))
+            if self._use_tts_handler():
+                completion_params = create_text_completion_params(self.model, messages, self.configuration)
+            else:
+                completion_params = create_completion_params(self.model, messages, self.configuration)
             chunk_stream = await self.completion_client.create(**completion_params)
             chunk = await anext(chunk_stream)
             if chunk.choices[0].delta.tool_calls is not None:
                 handler = self.conversation_item_function_call_handler
+            elif self._use_tts_handler():
+                handler = self.conversation_item_message_tts_handler
             elif self.configuration.modalities == ["text"]:
                 handler = self.conversation_item_message_text_handler
             else:
@@ -300,6 +372,8 @@ async def handle_response_create_event(ctx: SessionContext, event: ResponseCreat
         configuration=configuration,
         conversation=ctx.conversation,
         pubsub=ctx.pubsub,
+        speech_client=ctx.speech_client,
+        speech_model=ctx.session.speech_model,
     )
     ctx.pubsub.publish_nowait(ResponseCreatedEvent(response=ctx.response.response))
     ctx.response.start()
