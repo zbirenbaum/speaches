@@ -86,7 +86,7 @@ async def realtime(
         return
 
     await ws.accept()
-    logger.info(f"Accepted websocket connection with intent: {intent}")
+    logger.info(f"Accepted websocket connection with intent: {intent}, speech_client={speech_client}")
 
     completion_client = AsyncOpenAI(
         base_url=f"http://{config.host}:{config.port}/v1",
