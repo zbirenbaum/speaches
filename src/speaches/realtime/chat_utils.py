@@ -83,10 +83,8 @@ def create_text_completion_params(
             *messages,
         ],
         stream=True,
-        modalities=["text"],
         temperature=response.temperature,
         max_tokens=max_tokens,
-        stream_options=ChatCompletionStreamOptionsParam(include_usage=True),
         **_build_tool_kwargs(response),
     )
 
