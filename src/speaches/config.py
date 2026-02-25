@@ -11,6 +11,11 @@ type Quantization = Literal[
 ]
 
 
+class VllmTtsEndpoint(BaseModel):
+    model_id: str
+    base_url: str
+
+
 class WhisperConfig(BaseModel):
     """See https://github.com/SYSTRAN/faster-whisper/blob/master/faster_whisper/transcribe.py#L599."""
 
@@ -142,4 +147,12 @@ class Config(BaseSettings):
     Models will be downloaded sequentially if they do not already exist locally.
     Application will exit if any model fails to download or is not found in the registry.
     Example: ["Systran/faster-whisper-tiny", "rhasspy/piper-voices"]
+    """
+
+    vllm_tts_endpoints: list[VllmTtsEndpoint] = []
+    """
+    List of remote vLLM TTS endpoints to proxy requests to.
+    Each entry maps a model ID to a vLLM base URL.
+    Example: [{"model_id": "Qwen/Qwen3-TTS-12Hz-1.7B-Base", "base_url": "http://tts-voice-cloning:8000"}]
+    Set via VLLM_TTS_ENDPOINTS='[{"model_id": "...", "base_url": "..."}]'
     """

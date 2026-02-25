@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from speaches.config import Config
 
 from speaches.executors.kokoro import KokoroModelManager, kokoro_model_registry
+from speaches.executors.vllm_tts import VllmTtsProxy
 from speaches.executors.parakeet import ParakeetModelManager, parakeet_model_registry
 from speaches.executors.piper import PiperModelManager, piper_model_registry
 from speaches.executors.shared.executor import Executor
@@ -24,6 +25,7 @@ from speaches.executors.whisper import WhisperModelManager, whisper_model_regist
 
 class ExecutorRegistry:
     def __init__(self, config: Config) -> None:
+        self.vllm_tts_proxy = VllmTtsProxy(config.vllm_tts_endpoints) if config.vllm_tts_endpoints else None
         self._whisper_executor = Executor(
             name="whisper",
             model_manager=WhisperModelManager(config.stt_model_ttl, config.whisper),

@@ -54,7 +54,7 @@ class CreateSpeechRequestBody(BaseModel):
     model: ModelId
     input: str
     """The text to generate audio for."""
-    voice: str
+    voice: str = "alloy"
     response_format: SpeechResponseFormat = DEFAULT_SPEECH_RESPONSE_FORMAT
     # https://platform.openai.com/docs/api-reference/audio/createSpeech#audio-createspeech-voice
     speed: float = 1.0
@@ -63,6 +63,19 @@ class CreateSpeechRequestBody(BaseModel):
     """The format to stream the audio in. Supported formats are sse and audio"""
     sample_rate: int | None = Field(None, ge=MIN_SPEECH_SAMPLE_RATE, le=MAX_SPEECH_SAMPLE_RATE)
     """Desired sample rate to convert the generated audio to. If not provided, the model's default sample rate will be used."""
+    # vLLM Qwen3-TTS specific fields
+    task_type: Literal["CustomVoice", "VoiceDesign", "Base"] | None = None
+    """Qwen3-TTS task type. CustomVoice for preset voices, VoiceDesign for voice description, Base for voice cloning."""
+    instructions: str | None = None
+    """Style instructions for CustomVoice, or voice description for VoiceDesign."""
+    language: str | None = None
+    """Language hint (e.g. 'Auto', 'English', 'Chinese'). Used by vLLM Qwen3-TTS."""
+    ref_audio: str | None = None
+    """Base64-encoded reference audio for voice cloning (Base task). Format: 'data:audio/wav;base64,...'"""
+    ref_text: str | None = None
+    """Transcript of the reference audio for voice cloning (Base task)."""
+    max_new_tokens: int | None = None
+    """Maximum number of new tokens to generate."""
 
 
 def audio_gen_to_speech_audio_events(
@@ -87,6 +100,30 @@ def synthesize(
     executor_registry: ExecutorRegistryDependency,
     body: CreateSpeechRequestBody,
 ) -> StreamingResponse:
+    # Check vLLM proxy first for remote models
+    if executor_registry.vllm_tts_proxy and executor_registry.vllm_tts_proxy.can_handle(body.model):
+        extra_body: dict = {}
+        if body.task_type is not None:
+            extra_body["task_type"] = body.task_type
+        if body.instructions is not None:
+            extra_body["instructions"] = body.instructions
+        if body.language is not None:
+            extra_body["language"] = body.language
+        if body.ref_audio is not None:
+            extra_body["ref_audio"] = body.ref_audio
+        if body.ref_text is not None:
+            extra_body["ref_text"] = body.ref_text
+        if body.max_new_tokens is not None:
+            extra_body["max_new_tokens"] = body.max_new_tokens
+        return executor_registry.vllm_tts_proxy.proxy_speech_request(
+            model=body.model,
+            input_text=body.input,
+            voice=body.voice,
+            response_format=body.response_format,
+            speed=body.speed,
+            extra_body=extra_body if extra_body else None,
+        )
+
     model_card_data = get_model_card_data_or_raise(body.model)
     executor = find_executor_for_model_or_raise(body.model, model_card_data, executor_registry.text_to_speech)
 

@@ -30,6 +30,8 @@ def list_local_models(executor_registry: ExecutorRegistryDependency, task: Model
     for executor in executors:
         if task is None or executor.task == task:
             models.extend(list(executor.model_registry.list_local_models()))
+    if executor_registry.vllm_tts_proxy and (task is None or task == "text-to-speech"):
+        models.extend(executor_registry.vllm_tts_proxy.list_models())
     return JSONResponse(content={"data": [model.model_dump() for model in models], "object": "list"})
 
 
@@ -61,8 +63,10 @@ def list_local_audio_voices(
     models: list[KokoroModel | PiperModel] = []
     for executor in executor_registry.text_to_speech:
         models.extend(list(executor.model_registry.list_local_models()))
-    voices = [voice for model in models for voice in model.voices]
-    return JSONResponse(content={"voices": [voice.model_dump() for voice in voices], "object": "list"})
+    voices: list[dict] = [voice.model_dump() for model in models for voice in model.voices]
+    if executor_registry.vllm_tts_proxy:
+        voices.extend(executor_registry.vllm_tts_proxy.list_all_voices())
+    return JSONResponse(content={"voices": voices, "object": "list"})
 
 
 # TODO: this is very naive implementation. It should be improved
