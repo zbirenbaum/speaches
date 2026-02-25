@@ -1,11 +1,6 @@
 name: docker-build-and-push
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
-  release:
-    types: [published]
 env:
   REGISTRY: ghcr.io
   FULL_IMAGE_NAME: ghcr.io/zbirenbaum/speaches
