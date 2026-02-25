@@ -4,25 +4,19 @@ import logging
 from pathlib import Path
 import time
 from typing import TYPE_CHECKING, TypedDict
+import urllib.request
 
-from faster_whisper.utils import get_assets_path
 import numpy as np
 from opentelemetry import trace
 from pydantic import BaseModel
 
-from speaches.api_types import Model
-from speaches.executors.shared.base_model_manager import BaseModelManager, get_ort_providers_with_options
-from speaches.hf_utils import HfModelFilter
-from speaches.model_registry import ModelRegistry
-from speaches.tracing import traced
+from speaches.executors.shared.base_model_manager import BaseModelManager, get_ort_providers
+
+_SILERO_REPO = "https://raw.githubusercontent.com/snakers4/silero-vad/refs/heads/master/src/silero_vad/data"
+_CACHE_DIR = Path.home() / ".cache" / "speaches" / "silero-vad-v5"
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
-
     from numpy.typing import NDArray
-
-    from speaches.config import OrtOptions
-    from speaches.executors.shared.handler_protocol import VadRequest
 
 
 SAMPLE_RATE = 16000
@@ -33,30 +27,7 @@ logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
 
-# The code below is adapted from https://github.com/snakers4/silero-vad.
 class VadOptions(BaseModel):
-    """VAD options.
-
-    Attributes:
-      threshold: Speech threshold. Silero VAD outputs speech probabilities for each audio chunk,
-        probabilities ABOVE this value are considered as SPEECH. It is better to tune this
-        parameter for each dataset separately, but "lazy" 0.5 is pretty good for most datasets.
-      neg_threshold: Silence threshold for determining the end of speech. If a probability is lower
-        than neg_threshold, it is always considered silence. Values higher than neg_threshold
-        are only considered speech if the previous sample was classified as speech; otherwise,
-        they are treated as silence. This parameter helps refine the detection of speech
-         transitions, ensuring smoother segment boundaries.
-      min_speech_duration_ms: Final speech chunks shorter min_speech_duration_ms are thrown out.
-      max_speech_duration_s: Maximum duration of speech chunks in seconds. Chunks longer
-        than max_speech_duration_s will be split at the timestamp of the last silence that
-        lasts more than 100ms (if any), to prevent aggressive cutting. Otherwise, they will be
-        split aggressively just before max_speech_duration_s.
-      min_silence_duration_ms: In the end of each speech chunk wait for min_silence_duration_ms
-        before separating it
-      speech_pad_ms: Final speech chunks are padded by speech_pad_ms each side
-
-    """
-
     threshold: float = 0.5
     neg_threshold: float | None = None
     min_speech_duration_ms: int = 0
@@ -80,11 +51,6 @@ class SileroVADModel:
         import onnxruntime
 
         opts = onnxruntime.SessionOptions()
-        # opts.inter_op_num_threads = 1
-        # opts.intra_op_num_threads = 1
-        # opts.enable_cpu_mem_arena = False
-        # opts.log_severity_level = 4
-
         self.encoder_session = onnxruntime.InferenceSession(
             encoder_path,
             providers=providers,
@@ -139,52 +105,30 @@ class SileroVADModel:
         return out
 
 
-class SileroVADModelRegistry(ModelRegistry):
-    def list_remote_models(self) -> Generator[Model]:
-        return
-        yield  # pyright: ignore[reportUnreachable]
-
-    def list_local_models(self) -> Generator[Model]:
-        encoder_path = Path(get_assets_path()) / "silero_encoder_v5.onnx"
-        if encoder_path.exists():
-            yield Model(
-                id=MODEL_ID,
-                created=int(encoder_path.stat().st_mtime),
-                owned_by="snakers4",
-                task="voice-activity-detection",
-            )
-
-    def get_model_files(self, model_id: str) -> SileroVADModelFiles:
-        assert model_id == MODEL_ID, f"Only '{MODEL_ID}' model is supported"
-        encoder_path = Path(get_assets_path()) / "silero_encoder_v5.onnx"
-        decoder_path = Path(get_assets_path()) / "silero_decoder_v5.onnx"
-        return SileroVADModelFiles(encoder=encoder_path, decoder=decoder_path)
+def _ensure_downloaded(filename: str) -> Path:
+    path = _CACHE_DIR / filename
+    if not path.exists():
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        url = f"{_SILERO_REPO}/{filename}"
+        logger.info(f"Downloading {filename} from {url}")
+        urllib.request.urlretrieve(url, path)  # noqa: S310
+    return path
 
 
-silero_vad_model_registry = SileroVADModelRegistry(
-    hf_model_filter=HfModelFilter(library_name="onnx", task="voice-activity-detection")
-)
+def _get_model_files() -> SileroVADModelFiles:
+    encoder_path = _ensure_downloaded("silero_encoder_v5.onnx")
+    decoder_path = _ensure_downloaded("silero_decoder_v5.onnx")
+    return SileroVADModelFiles(encoder=encoder_path, decoder=decoder_path)
 
 
 class SileroVADModelManager(BaseModelManager[SileroVADModel]):
-    def __init__(self, ttl: int, ort_opts: OrtOptions) -> None:
+    def __init__(self, ttl: int) -> None:
         super().__init__(ttl)
-        self.ort_opts = ort_opts
 
-    def _load_fn(self, model_id: str) -> SileroVADModel:
-        model_files = silero_vad_model_registry.get_model_files(model_id)
-        providers = get_ort_providers_with_options(self.ort_opts)
+    def _load_fn(self, model_id: str) -> SileroVADModel:  # noqa: ARG002
+        model_files = _get_model_files()
+        providers = get_ort_providers()
         return SileroVADModel(model_files.encoder, model_files.decoder, providers)
-
-    @traced()
-    def handle_vad_request(self, request: VadRequest, **_kwargs) -> list[SpeechTimestamp]:
-        return get_speech_timestamps(
-            request.audio.data,
-            model_manager=self,
-            model_id=request.model_id,
-            vad_options=request.vad_options,
-            sampling_rate=request.sampling_rate,
-        )
 
 
 def get_speech_timestamps(
@@ -194,19 +138,6 @@ def get_speech_timestamps(
     model_id: str = MODEL_ID,
     sampling_rate: int = SAMPLE_RATE,
 ) -> list[SpeechTimestamp]:
-    """This method is used for splitting long audios into speech chunks using silero VAD.
-
-    Args:
-      audio: One dimensional float array.
-      model_manager: The model manager instance for loading the VAD model.
-      model_id: The model ID to use for VAD.
-      vad_options: Options for VAD processing.
-      sampling rate: Sampling rate of the audio.
-
-    Returns:
-      List of dicts containing begin and end samples of each speech chunk.
-
-    """
     _perf_start = time.perf_counter()
 
     threshold = vad_options.threshold
@@ -234,9 +165,7 @@ def get_speech_timestamps(
         if neg_threshold is None:
             neg_threshold = max(threshold - 0.15, 0.01)
 
-        # to save potential segment end (and tolerate some silence)
         temp_end = 0
-        # to save potential segment limits in case of maximum segment size reached
         prev_end = next_start = 0
 
         for i, speech_prob in enumerate(speech_probs):
@@ -255,7 +184,6 @@ def get_speech_timestamps(
                     current_speech["end"] = prev_end
                     speeches.append(current_speech)
                     current_speech = {}
-                    # previously reached silence (< neg_thres) and is still not speech (< thres)
                     if next_start < prev_end:
                         triggered = False
                     else:
@@ -272,7 +200,6 @@ def get_speech_timestamps(
             if (speech_prob < neg_threshold) and triggered:
                 if not temp_end:
                     temp_end = window_size_samples * i
-                # condition to avoid cutting in very short silence
                 if (window_size_samples * i) - temp_end > min_silence_samples_at_max_speech:
                     prev_end = temp_end
                 if (window_size_samples * i) - temp_end < min_silence_samples:
@@ -333,8 +260,6 @@ def merge_segments(
     curr_start = segments_list[0].start
 
     for idx, seg in enumerate(segments_list):
-        # if any segment start timing is less than previous segment end timing,
-        # reset the edge padding. Similarly for end timing.
         if idx > 0:
             if seg.start < segments_list[idx - 1].end:
                 seg.start += edge_padding
@@ -354,7 +279,6 @@ def merge_segments(
             seg_idxs = []
         curr_end = seg.end
         seg_idxs.append((seg.start, seg.end))
-    # add final
     merged_segments.append(
         {
             "start": curr_start,
@@ -363,71 +287,3 @@ def merge_segments(
         }
     )
     return merged_segments
-
-
-# NOTE: below code was copied over from `faster_whisper.vad` but is not used anywhere. Kept for reference.
-#
-#
-# class ChunkMetadata(TypedDict):
-#     start_time: float
-#     end_time: float
-#
-# def collect_chunks(
-#     audio: np.ndarray, chunks: list[dict], sampling_rate: int = SAMPLE_RATE
-# ) -> tuple[list[np.ndarray], list[ChunkMetadata]]:
-#     """Collects audio chunks."""
-#     if not chunks:
-#         chunk_metadata: ChunkMetadata = {
-#             "start_time": 0,
-#             "end_time": 0,
-#         }
-#         return [np.array([], dtype=np.float32)], [chunk_metadata]
-#
-#     audio_chunks = []
-#     chunks_metadata = []
-#     for chunk in chunks:
-#         chunk_metadata = {
-#             "start_time": chunk["start"] / sampling_rate,
-#             "end_time": chunk["end"] / sampling_rate,
-#         }
-#         audio_chunks.append(audio[chunk["start"] : chunk["end"]])
-#         chunks_metadata.append(chunk_metadata)
-#     return audio_chunks, chunks_metadata
-#
-#
-# class SpeechTimestampsMap:
-#     """Helper class to restore original speech timestamps."""
-#
-#     def __init__(self, chunks: list[dict], sampling_rate: int, time_precision: int = 2) -> None:
-#         self.sampling_rate = sampling_rate
-#         self.time_precision = time_precision
-#         self.chunk_end_sample = []
-#         self.total_silence_before = []
-#
-#         previous_end = 0
-#         silent_samples = 0
-#
-#         for chunk in chunks:
-#             silent_samples += chunk["start"] - previous_end
-#             previous_end = chunk["end"]
-#
-#             self.chunk_end_sample.append(chunk["end"] - silent_samples)
-#             self.total_silence_before.append(silent_samples / sampling_rate)
-#
-#     def get_original_time(
-#         self,
-#         time: float,
-#         chunk_index: int | None = None,
-#     ) -> float:
-#         if chunk_index is None:
-#             chunk_index = self.get_chunk_index(time)
-#
-#         total_silence_before = self.total_silence_before[chunk_index]
-#         return round(total_silence_before + time, self.time_precision)
-#
-#     def get_chunk_index(self, time: float) -> int:
-#         sample = int(time * self.sampling_rate)
-#         return min(
-#             bisect.bisect(self.chunk_end_sample, sample),
-#             len(self.chunk_end_sample) - 1,
-#         )

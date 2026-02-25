@@ -8,7 +8,7 @@ on:
     types: [published]
 env:
   REGISTRY: ghcr.io
-  FULL_IMAGE_NAME: ghcr.io/speaches-ai/speaches
+  FULL_IMAGE_NAME: ghcr.io/zbirenbaum/speaches
 jobs:
   docker:
     runs-on: ubuntu-24.04-4core-x86

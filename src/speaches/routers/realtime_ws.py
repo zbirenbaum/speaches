@@ -10,9 +10,10 @@ from fastapi import (
 from openai import AsyncOpenAI
 
 from speaches.dependencies import (
+    BackendRegistryDependency,
     ConfigDependency,
-    ExecutorRegistryDependency,
     TranscriptionClientDependency,
+    VadModelManagerDependency,
 )
 from speaches.realtime.context import SessionContext
 from speaches.realtime.conversation_event_router import event_router as conversation_event_router
@@ -58,43 +59,46 @@ async def realtime(
     ws: WebSocket,
     model: str,
     config: ConfigDependency,
+    registry: BackendRegistryDependency,
     transcription_client: TranscriptionClientDependency,
-    executor_registry: ExecutorRegistryDependency,
+    vad_model_manager: VadModelManagerDependency,
     intent: str = "conversation",
     language: str | None = None,
     transcription_model: str | None = None,
 ) -> None:
-    """OpenAI Realtime API compatible WebSocket endpoint.
-
-    According to OpenAI Realtime API specification:
-    - 'model' parameter is the conversation model (e.g., gpt-4o-realtime-preview)
-    - 'transcription_model' parameter is for input_audio_transcription.model
-    - 'intent' parameter controls session behavior (conversation vs transcription)
-
-    References:
-    - https://platform.openai.com/docs/guides/realtime/overview
-    - https://platform.openai.com/docs/api-reference/realtime-server-events/session/update
-
-    """
-    # Manually verify WebSocket authentication before accepting connection
     try:
         await verify_websocket_api_key(ws, config)
     except WebSocketException:
         await ws.close(code=status.WS_1008_POLICY_VIOLATION, reason="Authentication failed")
         return
 
+    backend = registry.get_backend(model)
+    if backend is None:
+        await ws.close(code=status.WS_1008_POLICY_VIOLATION, reason=f"Model '{model}' not found in backend registry")
+        return
+
     await ws.accept()
-    logger.info(f"Accepted websocket connection with intent: {intent}")
+    logger.info(f"Accepted websocket connection with intent: {intent}, backend: {backend.base_url}")
+
+    auth_kwargs = {}
+    if backend.auth_user and backend.auth_password:
+        import httpx
+
+        auth_kwargs["http_client"] = httpx.AsyncClient(
+            auth=httpx.BasicAuth(backend.auth_user, backend.auth_password),
+            timeout=httpx.Timeout(timeout=180.0),
+        )
 
     completion_client = AsyncOpenAI(
-        base_url=f"http://{config.host}:{config.port}/v1",
-        api_key=config.api_key.get_secret_value() if config.api_key else "cant-be-empty",
+        base_url=backend.base_url,
+        api_key="not-used",
         max_retries=0,
+        **auth_kwargs,
     ).chat.completions
     ctx = SessionContext(
         transcription_client=transcription_client,
         completion_client=completion_client,
-        vad_model_manager=executor_registry.vad.model_manager,
+        vad_model_manager=vad_model_manager,
         session=create_session_object_configuration(model, intent, language, transcription_model),
     )
     message_manager = WsServerMessageManager(ctx.pubsub)

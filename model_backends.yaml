@@ -1,0 +1,15 @@
+backends:
+  - id: Qwen/Qwen3-Omni-30B-A3B-Instruct-Async
+    base_url: http://100.99.37.118/omni/v1
+    auth_user: tts-api
+    auth_password: fEQ6E4ugEtJF3j9rH8H4DJyU
+    capabilities: [stt, tts, chat]
+    input_modalities: [text, audio, image, video]
+    output_modalities: [text, audio]
+  - id: Qwen/Qwen3-Omni-30B-A3B-Instruct-Sync
+    base_url: http://100.99.37.118/omni-sync/v1
+    auth_user: tts-api
+    auth_password: fEQ6E4ugEtJF3j9rH8H4DJyU
+    capabilities: [stt, tts, chat]
+    input_modalities: [text, audio, image, video]
+    output_modalities: [text, audio]

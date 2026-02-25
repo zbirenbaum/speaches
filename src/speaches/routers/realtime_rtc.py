@@ -27,9 +27,9 @@ from openai.types.beta.realtime.error_event import Error
 from pydantic import ValidationError
 
 from speaches.dependencies import (
-    ConfigDependency,
-    ExecutorRegistryDependency,
+    BackendRegistryDependency,
     TranscriptionClientDependency,
+    VadModelManagerDependency,
 )
 from speaches.realtime.context import SessionContext
 from speaches.realtime.conversation_event_router import event_router as conversation_event_router
@@ -260,19 +260,33 @@ def track_handler(ctx: SessionContext, track: RemoteStreamTrack) -> None:
 async def realtime_webrtc(
     request: Request,
     model: Annotated[str, Query(...)],
-    config: ConfigDependency,
+    registry: BackendRegistryDependency,
     transcription_client: TranscriptionClientDependency,
-    executor_registry: ExecutorRegistryDependency,
+    vad_model_manager: VadModelManagerDependency,
 ) -> Response:
+    backend = registry.get_backend(model)
+    if backend is None:
+        return Response(status_code=404, content=f"Model '{model}' not found in backend registry")
+
+    auth_kwargs = {}
+    if backend.auth_user and backend.auth_password:
+        import httpx as _httpx
+
+        auth_kwargs["http_client"] = _httpx.AsyncClient(
+            auth=_httpx.BasicAuth(backend.auth_user, backend.auth_password),
+            timeout=_httpx.Timeout(timeout=180.0),
+        )
+
     completion_client = AsyncOpenAI(
-        base_url=f"http://{config.host}:{config.port}/v1",
-        api_key=config.api_key.get_secret_value() if config.api_key else "cant-be-empty",
+        base_url=backend.base_url,
+        api_key="not-used",
         max_retries=0,
+        **auth_kwargs,
     ).chat.completions
     ctx = SessionContext(
         transcription_client=transcription_client,
         completion_client=completion_client,
-        vad_model_manager=executor_registry.vad.model_manager,
+        vad_model_manager=vad_model_manager,
         session=create_session_object_configuration(model, "conversation", None, None),
     )
     rtc_session_tasks[ctx.session.id] = set()

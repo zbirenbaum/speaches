@@ -82,6 +82,14 @@ class ImageURL(BaseModel):
     detail: Literal["auto", "low", "high"] | None = Field(None, title="Detail")
 
 
+class AudioURL(BaseModel):
+    url: str = Field(..., title="Url")
+
+
+class VideoURL(BaseModel):
+    url: str = Field(..., title="Url")
+
+
 class InputAudio(BaseModel):
     data: str = Field(..., title="Data")
     format: Literal["wav", "mp3"] = Field(..., title="Format")
@@ -132,6 +140,16 @@ class ChatCompletionContentPartInputAudioParam(BaseModel):
     type: Literal["input_audio"] = Field(..., title="Type")
 
 
+class ChatCompletionContentPartAudioUrlParam(BaseModel):
+    audio_url: AudioURL
+    type: Literal["audio_url"] = Field(..., title="Type")
+
+
+class ChatCompletionContentPartVideoUrlParam(BaseModel):
+    video_url: VideoURL
+    type: Literal["video_url"] = Field(..., title="Type")
+
+
 class ChatCompletionMessageToolCallParam(BaseModel):
     id: str = Field(..., title="Id")
     function: OpenaiTypesChatChatCompletionMessageToolCallParamFunction
@@ -155,6 +173,8 @@ class ChatCompletionUserMessageParam(BaseModel):
             ChatCompletionContentPartTextParam
             | ChatCompletionContentPartImageParam
             | ChatCompletionContentPartInputAudioParam
+            | ChatCompletionContentPartAudioUrlParam
+            | ChatCompletionContentPartVideoUrlParam
         ]
     ) = Field(..., title="Content")
     role: Literal["user"] = Field(..., title="Role")
