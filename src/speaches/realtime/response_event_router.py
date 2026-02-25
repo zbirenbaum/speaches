@@ -326,7 +326,9 @@ class ResponseHandler:
             self.pubsub.publish_nowait(
                 ErrorEvent(error=Error(type="server_error", message=f"{type(e).__name__}: {e.message}"))
             )
-            raise
+        except Exception as e:
+            logger.exception("Unexpected error while generating response")
+            self.pubsub.publish_nowait(ErrorEvent(error=Error(type="server_error", message=f"{type(e).__name__}: {e}")))
 
     def start(self) -> None:
         assert self.task is None
